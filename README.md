@@ -55,7 +55,7 @@ Claude 앱 오른쪽 패널의 환경 → 환경 이름 옆 톱니바퀴 → 설
 
 ```
 claude plugin marketplace add kangta1149-oss/claude-mods || true
-claude plugin install task-progress@claude-mods --scope user || true
+claude plugin install task-progress@claude-mods --scope user --config progressFile=auto || true
 ```
 
 클라우드에서는 Pane이 그려지지 않으므로 작업 폴더의 `progress.html`로 본다.
