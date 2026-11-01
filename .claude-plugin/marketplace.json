@@ -1,0 +1,12 @@
+{
+  "name": "claude-mods",
+  "description": "학원 작업용 Claude Code mod 모음",
+  "owner": { "name": "kangta1149-oss" },
+  "plugins": [
+    {
+      "name": "task-progress",
+      "source": "./task-progress",
+      "description": "작업 체크리스트 진행률, 메인 모델과 서브에이전트를 오른쪽 Pane에 보여 준다 (/progress)"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "task-progress",
+  "version": "0.2.0",
+  "description": "작업 체크리스트 진행률(파란 동그라미, 퍼센트·막대·도넛), 메인 모델과 서브에이전트의 모델·추론 수준을 오른쪽 Pane에 보여 준다 (/progress)",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "kangta1149-oss"
+  },
+  "userConfig": {
+    "progressFile": {
+      "type": "string",
+      "title": "진행판 파일 (progress.html)",
+      "description": "auto: Pane을 그릴 화면이 없는 클라우드 세션에서만 작업 폴더에 progress.html을 쓴다. always: 항상 쓴다. off: 쓰지 않는다.",
+      "default": "auto",
+      "options": ["auto", "always", "off"]
+    }
+  }
+}
