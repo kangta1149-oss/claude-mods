@@ -1,4 +1,4 @@
-import type { AgentRun, ModelUse, ProgressStyle, TaskItem } from '../types'
+import type { AgentRun, ModelUse, ProgressStyle, RequestItem, TaskItem } from '../types'
 
 export const BLUE = '#2f80ed'
 export const TRACK = '#d0d7e2'
@@ -19,6 +19,141 @@ export function summarize(list: readonly TaskItem[]) {
 
   return { done, total, left: total - done, percent, label: `완료 ${done}/${total} · ${percent}%` }
 }
+
+const batchOf = (task: TaskItem) => task.batch ?? 1
+
+/**
+ * The batch a task created now joins: the latest one while any of its tasks is
+ * still open, a new one once all of them are completed (a new piece of work).
+ */
+export function nextBatch(list: readonly TaskItem[]) {
+  if (list.length === 0) return 1
+  const latest = Math.max(...list.map(batchOf))
+  const isOpen = list.some(task => batchOf(task) === latest && task.status !== 'completed')
+
+  return isOpen ? latest : latest + 1
+}
+
+/** The first line of what the person sent, short enough for one row. */
+export function titleOf(text: string, room = 40) {
+  const line = text.trim().split('\n')[0]!.trim()
+
+  return line.length > room ? `${line.slice(0, room - 1)}…` : line
+}
+
+export function durationLabel(ms: number) {
+  const seconds = Math.max(0, Math.round(ms / 1000))
+  if (seconds < 60) return `${seconds}초`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}분 ${seconds % 60}초`
+
+  return `${Math.floor(minutes / 60)}시간 ${minutes % 60}분`
+}
+
+const ACTIVITY: Record<string, string> = {
+  Bash: '명령 실행',
+  PowerShell: '명령 실행',
+  Read: '파일 읽기',
+  Write: '파일 쓰기',
+  Edit: '파일 수정',
+  NotebookEdit: '노트북 수정',
+  Glob: '파일 찾기',
+  Grep: '내용 찾기',
+  WebSearch: '웹 검색',
+  WebFetch: '웹 페이지 읽기',
+  Agent: '서브에이전트 실행',
+  Task: '서브에이전트 실행',
+  TaskCreate: '체크리스트 작성',
+  TaskUpdate: '체크리스트 갱신',
+  TaskList: '체크리스트 확인',
+  TodoWrite: '체크리스트 갱신',
+  Skill: '스킬 사용',
+  AskUserQuestion: '질문하는 중',
+  ToolSearch: '도구 찾기',
+}
+
+/** What a tool call is doing, in the person's words; an MCP tool by its server. */
+export function activityOf(tool: string) {
+  const known = ACTIVITY[tool]
+  if (known) return known
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(tool)
+
+  return mcp ? `${mcp[1]} 사용` : tool
+}
+
+export const requestMark = (status: RequestItem['status']) =>
+  status === 'done' ? '●' : status === 'running' ? '◐' : '⊘'
+
+export const RECENT_REQUESTS = 8
+
+export type Board = {
+  /** What the meter shows: the open checklist, else the requests. */
+  source: 'checklist' | 'requests' | 'none'
+  done: number
+  total: number
+  percent: number
+  label: string
+  left: string
+  /** The latest checklist, the one the meter follows. */
+  current: TaskItem[]
+  /** Checklists finished before it, folded to one line. */
+  earlier: { batches: number; tasks: number }
+  latest: RequestItem | undefined
+  recent: RequestItem[]
+  olderRequests: number
+}
+
+/**
+ * Everything the pane and progress.md show, from the checklist and the
+ * requests. The meter follows the latest checklist while it is open, or while
+ * no request runs; a request running past a finished checklist (or with none)
+ * moves the meter by the requests instead, so every message shows progress.
+ */
+export function boardOf(tasks: readonly TaskItem[], requests: readonly RequestItem[]): Board {
+  const latestBatch = tasks.length === 0 ? 0 : Math.max(...tasks.map(batchOf))
+  const current = tasks.filter(task => batchOf(task) === latestBatch)
+  const before = tasks.filter(task => batchOf(task) < latestBatch)
+  const isRunning = requests.some(request => request.status === 'running')
+  const isOpen = current.some(task => task.status !== 'completed')
+  const latest = requests[requests.length - 1]
+  const recent = requests.slice(-RECENT_REQUESTS)
+  const base = {
+    current,
+    earlier: { batches: new Set(before.map(batchOf)).size, tasks: before.length },
+    latest,
+    recent,
+    olderRequests: requests.length - recent.length,
+  }
+
+  if (current.length > 0 && (isOpen || !isRunning)) {
+    const { done, total, left, percent } = summarize(current)
+
+    return { ...base, source: 'checklist', done, total, percent, label: `완료 ${done}/${total} · ${percent}%`, left: `완료 ${done}개 · 남은 작업 ${left}개` }
+  }
+  if (requests.length > 0) {
+    const total = requests.length
+    const done = requests.filter(request => request.status !== 'running').length
+    const percent = Math.round((done / total) * 100)
+
+    return { ...base, source: 'requests', done, total, percent, label: `요청 완료 ${done}/${total} · ${percent}%`, left: `끝난 요청 ${done}개 · 진행 중 ${total - done}개` }
+  }
+
+  return { ...base, source: 'none', done: 0, total: 0, percent: 0, label: '완료 0/0 · 0%', left: '아직 맡긴 작업이 없습니다.' }
+}
+
+/** The "지금" line: what the latest request is doing, or that nothing runs. */
+export function nowLine(latest: RequestItem | undefined) {
+  if (!latest) return '대기 중'
+  if (latest.status === 'running') {
+    return `진행 중 · ${latest.title} · 단계 ${latest.steps}${latest.activity ? ` · ${latest.activity}` : ''}`
+  }
+
+  return `대기 중 · 마지막 요청 ${latest.status === 'done' ? '끝남' : '중단됨'}${latest.took ? ` (${latest.took})` : ''}`
+}
+
+/** One row of the request log, after its circle. */
+export const requestRow = (request: RequestItem) =>
+  `${request.title} · ${request.startedAt} · 단계 ${request.steps}${request.took ? ` · ${request.took}` : ''}`
 
 /** `claude-opus-5-5` → `Opus 5.5`; anything else as it came. */
 export function modelName(model: string) {
@@ -151,9 +286,13 @@ export type Snapshot = {
   tasks: readonly TaskItem[]
   main: ModelUse | null
   agents: readonly AgentRun[]
+  requests: readonly RequestItem[]
   style: ProgressStyle
   updatedAt: string
 }
+
+const REQUEST_DOT = { done: 'completed', running: 'in_progress', stopped: 'pending' } as const
+const REQUEST_ALT = { done: '끝남', running: '진행 중', stopped: '중단됨' } as const
 
 /**
  * The progress board as a Markdown page, for a session no surface draws a pane
@@ -161,8 +300,9 @@ export type Snapshot = {
  * opens as source until its preview is turned on. The meter and the circles
  * are blue SVG images carried in the file.
  */
-export function progressMarkdown({ tasks, main, agents, style, updatedAt }: Snapshot) {
-  const { done, total, left, percent, label } = summarize(tasks)
+export function progressMarkdown({ tasks, main, agents, requests, style, updatedAt }: Snapshot) {
+  const board = boardOf(tasks, requests)
+  const { percent } = board
   const running = agents.filter(agent => agent.status === 'running').length
   const meter =
     style === 'donut'
@@ -174,7 +314,7 @@ export function progressMarkdown({ tasks, main, agents, style, updatedAt }: Snap
     group => `  - ${plain(group.label)} ×${group.count}${group.running ? ` · 실행 중 ${group.running}` : ''}`,
   )
   // One row per line (a hard break, two spaces), no list bullet beside the circle.
-  const rows = tasks.map(task => {
+  const taskRows = board.current.map(task => {
     const dot = svgImage(DOT_ALT[task.status], dotSvg(task.status))
     const subject = plain(task.subject)
     const text =
@@ -182,15 +322,23 @@ export function progressMarkdown({ tasks, main, agents, style, updatedAt }: Snap
 
     return `${dot} ${text}`
   })
+  const requestRows = board.recent.map(request => {
+    const dot = svgImage(REQUEST_ALT[request.status], dotSvg(REQUEST_DOT[request.status]))
+    const row = plain(requestRow(request))
+
+    return `${dot} ${request.status === 'running' ? `**${row}**` : row}${request.status === 'stopped' ? ' _(중단됨)_' : ''}`
+  })
 
   return [
     '# 작업 진행률',
     '',
     meter,
     '',
-    `**${label}**`,
+    `**${board.label}**`,
     '',
-    `완료 ${done}개 · 남은 작업 ${left}개`,
+    board.left,
+    '',
+    `**지금:** ${plain(nowLine(board.latest))}`,
     '',
     '## 모델',
     '',
@@ -198,9 +346,15 @@ export function progressMarkdown({ tasks, main, agents, style, updatedAt }: Snap
     `- 서브에이전트 ${agents.length}개${running ? ` (실행 중 ${running})` : ''}`,
     ...groups,
     '',
-    `## 작업 목록 (${total})`,
+    `## 체크리스트 (${board.current.length})`,
     '',
-    rows.length > 0 ? rows.join('  \n') : '체크리스트 항목이 아직 없습니다.',
+    taskRows.length > 0 ? taskRows.join('  \n') : '체크리스트 항목이 아직 없습니다.',
+    ...(board.earlier.tasks > 0 ? ['', `_앞서 끝낸 체크리스트 ${board.earlier.batches}개 · 항목 ${board.earlier.tasks}개_`] : []),
+    '',
+    `## 요청 기록 (${requests.length})`,
+    '',
+    requestRows.length > 0 ? requestRows.join('  \n') : '아직 보낸 요청이 없습니다.',
+    ...(board.olderRequests > 0 ? ['', `_이전 요청 ${board.olderRequests}개는 접어 둠_`] : []),
     '',
     `_갱신 ${plain(updatedAt)} · 파일을 다시 열면 최신 내용이 보인다_`,
     '',

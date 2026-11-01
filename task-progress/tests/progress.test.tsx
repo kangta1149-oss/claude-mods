@@ -64,7 +64,7 @@ test('완료 수, 퍼센트, 상태 표시가 체크리스트를 원래 순서�
     expect((await ui.find({ key: 'summary' }))?.text).toBe('완료 1/3 · 33%')
     expect((await ui.find({ key: 'left' }))?.text).toBe('완료 1개 · 남은 작업 2개')
     const list = (await ui.find({ key: 'tasks' }))?.text
-    expect(list).toContain('작업 목록 (3)')
+    expect(list).toContain('체크리스트 (3)')
     expect(list).toContain('● 지문 분석')
     expect(list).toContain('◐ 단어 추출')
     expect(list).toContain('○ 해설 작성')
@@ -81,7 +81,7 @@ test('완료 수, 퍼센트, 상태 표시가 체크리스트를 원래 순서�
     expect((await ui.find({ key: 'summary' }))?.text).toBe('완료 1/2 · 50%')
     expect((await ui.find({ key: 'left' }))?.text).toBe('완료 1개 · 남은 작업 1개')
     const list = (await ui.find({ key: 'tasks' }))?.text
-    expect(list).toContain('작업 목록 (2)')
+    expect(list).toContain('체크리스트 (2)')
     expect(list).not.toContain('해설 작성')
     await ui.unmount()
   }
@@ -128,9 +128,9 @@ test('항목이 없으면 0/0과 안내 문구를 보여 준다', async ($, on) 
   for (const surface of SURFACES) {
     const ui = await mountPane($, surface)
     expect((await ui.find({ key: 'summary' }))?.text).toBe('완료 0/0 · 0%')
-    expect((await ui.find({ key: 'left' }))?.text).toBe('완료 0개 · 남은 작업 0개')
+    expect((await ui.find({ key: 'left' }))?.text).toBe('아직 맡긴 작업이 없습니다.')
     const list = (await ui.find({ key: 'tasks' }))?.text
-    expect(list).toContain('작업 목록 (0)')
+    expect(list).toContain('체크리스트 (0)')
     expect(list).toContain('체크리스트 항목이 아직 없습니다.')
     expect((await ui.find({ key: 'meter' }))?.text).toBe('░'.repeat(20))
     await ui.unmount()
@@ -385,7 +385,7 @@ test('progress.md는 표시 방식별 파란 그림, 모델, 동그라미 목록
     { id: 'a', description: '', type: 'general', model: 'claude-haiku-4-5', effort: 'low', status: 'running' },
   ] as const
   const page = (style: 'percent' | 'bar' | 'donut') =>
-    progressMarkdown({ tasks, agents, main: { model: 'claude-opus-5-5', effort: 'high' }, style, updatedAt: 't' })
+    progressMarkdown({ tasks, agents, main: { model: 'claude-opus-5-5', effort: 'high' }, style, updatedAt: 't', requests: [] })
 
   const bar = page('bar')
   expect(bar).toContain(svgImage('진행률 33%', barSvg(33)))
@@ -405,7 +405,126 @@ test('progress.md는 표시 방식별 파란 그림, 모델, 동그라미 목록
   expect(page('donut')).toContain(svgImage('진행률 33%', donutSvg(33, 140)))
   expect(page('percent')).toContain(svgImage('진행률 33%', percentSvg(33)))
   expect(bar).toMatch(/^!\[진행률 33%\]\(data:image\/svg\+xml;base64,[A-Za-z0-9+/=]+\)$/m)
-  expect(progressMarkdown({ tasks: [], agents: [], main: null, style: 'bar', updatedAt: 't' })).toContain(
+  expect(progressMarkdown({ tasks: [], agents: [], requests: [], main: null, style: 'bar', updatedAt: 't' })).toContain(
     '체크리스트 항목이 아직 없습니다.',
   )
+})
+
+/** The engine's turn events, answered beneath the plugin, and a way to drive a main-loop request. */
+function turns(on: On) {
+  on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', async (_$, e) => ({ text: e.answer }))
+  on('tool.call', { tool: 'WebSearch' }, async () => ({ result: {} as never }))
+}
+
+const ask = ($: Engine, turnId: string, text: string) => $.turn.start({ text, turnId })
+const finish = ($: Engine, turnId: string, durationMs = 3000, reason: 'answer' | 'aborted' = 'answer') =>
+  $.turn.complete({ answer: '끝', durationMs, isAborted: reason === 'aborted', turnId, reason })
+
+test('보낸 요청마다 진행 중·단계 수·지금 하는 일을 기록하고, 끝나면 채운다', async ($, on) => {
+  world(on)
+  turns(on)
+
+  await ask($, 'turn-1', '오늘 대구 날씨 알려줘\n시간별로')
+  await $.tool.call({ tool: 'WebSearch', query: '대구 날씨', mode: 'standard' })
+  await $.tool.call({ tool: 'WebSearch', query: '대구 시간별 날씨', mode: 'standard' })
+  for (const surface of SURFACES) {
+    const ui = await mountPane($, surface)
+    expect((await ui.find({ key: 'now' }))?.text).toBe('지금 · 진행 중 · 오늘 대구 날씨 알려줘 · 단계 2 · 웹 검색')
+    expect((await ui.find({ key: 'summary' }))?.text).toBe('요청 완료 0/1 · 0%')
+    expect((await ui.find({ key: 'requests' }))?.text).toContain('◐ 오늘 대구 날씨 알려줘 · ')
+    await ui.unmount()
+  }
+
+  await finish($, 'turn-1', 83_000)
+  await ask($, 'turn-2', '내일은?')
+  for (const surface of SURFACES) {
+    const ui = await mountPane($, surface)
+    const log = (await ui.find({ key: 'requests' }))?.text ?? ''
+    expect(log).toContain('요청 기록 (2)')
+    expect(log).toMatch(/● 오늘 대구 날씨 알려줘 · \d\d:\d\d · 단계 2 · 1분 23초/)
+    expect(log).toContain('◐ 내일은?')
+    expect((await ui.find({ key: 'summary' }))?.text).toBe('요청 완료 1/2 · 50%')
+    await ui.unmount()
+  }
+
+  await finish($, 'turn-2', 1000, 'aborted')
+  const ui = await mountPane($, 'terminal')
+  expect((await ui.find({ key: 'requests' }))?.text).toContain('⊘ 내일은?')
+  expect((await ui.find({ key: 'now' }))?.text).toBe('지금 · 대기 중 · 마지막 요청 중단됨 (1초)')
+  await ui.unmount()
+})
+
+test('체크리스트는 후속 요청에도 이어지고, 다 끝낸 묶음은 접힌다', async ($, on) => {
+  world(on)
+  turns(on)
+  taskTools(on)
+
+  await ask($, 'turn-1', '대원고 동형 1회 만들어 줘')
+  await threeTasks($)
+  await finish($, 'turn-1')
+  // A follow-up goes on with the same checklist: the meter keeps following it.
+  await ask($, 'turn-2', '계속해 줘')
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'completed' })
+  let ui = await mountPane($, 'terminal')
+  expect((await ui.find({ key: 'summary' }))?.text).toBe('완료 2/3 · 67%')
+  expect((await ui.find({ key: 'now' }))?.text).toBe('지금 · 진행 중 · 계속해 줘 · 단계 1 · 체크리스트 갱신')
+  await ui.unmount()
+
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '3', status: 'completed' })
+  await finish($, 'turn-2')
+  // A request past a finished checklist moves the meter by the requests.
+  await ask($, 'turn-3', '오늘 날씨는?')
+  ui = await mountPane($, 'terminal')
+  expect((await ui.find({ key: 'summary' }))?.text).toBe('요청 완료 2/3 · 67%')
+  await ui.unmount()
+
+  // New work opens a new checklist; the finished one folds to a line.
+  await $.tool.call({ tool: 'TaskCreate', subject: '정답표', description: '정답표' })
+  for (const surface of SURFACES) {
+    const ui = await mountPane($, surface)
+    expect((await ui.find({ key: 'summary' }))?.text).toBe('완료 0/1 · 0%')
+    const list = (await ui.find({ key: 'tasks' }))?.text ?? ''
+    expect(list).toContain('체크리스트 (1)')
+    expect(list).toContain('○ 정답표')
+    expect(list).not.toContain('지문 분석')
+    expect(list).toContain('앞서 끝낸 체크리스트 1개 · 항목 3개')
+    await ui.unmount()
+  }
+})
+
+test('여러 단계 작업에는 체크리스트를 쓰라는 안내를 시스템 프롬프트 끝에 붙인다', async ($, on) => {
+  on('prompt.compose', async () => ({ sections: [{ id: 'intro', text: '...', scope: 'shared' as const }] }))
+  const composed = await $.prompt.compose({
+    model: 'claude-opus-5-5',
+    promptModel: 'claude-opus-5-5',
+    surfaces: ['terminal'],
+    tools: ['TaskCreate', 'TaskUpdate'],
+    outputStyle: null,
+    traits: [],
+  })
+  expect(composed.sections.map(section => section.id)).toEqual(['intro', 'task-progress'])
+  const guide = composed.sections[1]!
+  expect(guide.scope).toBe('session')
+  expect(guide.text).toContain('more than one step')
+  expect(guide.text).toContain('follow-up')
+})
+
+test('progress.md에도 지금 하는 일과 요청 기록이 들어간다', async () => {
+  const page = progressMarkdown({
+    tasks: [],
+    agents: [],
+    main: null,
+    style: 'bar',
+    updatedAt: 't',
+    requests: [
+      { id: 'a', title: '오늘 날씨', status: 'done', startedAt: '14:02', took: '20초', steps: 2 },
+      { id: 'b', title: '교재 만들기', status: 'running', startedAt: '14:05', steps: 4, activity: '파일 수정' },
+    ],
+  })
+  expect(page).toContain('**요청 완료 1/2 · 50%**')
+  expect(page).toContain('**지금:** 진행 중 · 교재 만들기 · 단계 4 · 파일 수정')
+  expect(page).toContain('## 요청 기록 (2)')
+  expect(page).toContain(`${svgImage('끝남', dotSvg('completed'))} 오늘 날씨 · 14:02 · 단계 2 · 20초`)
+  expect(page).toContain(`${svgImage('진행 중', dotSvg('in_progress'))} **교재 만들기 · 14:05 · 단계 4**`)
 })

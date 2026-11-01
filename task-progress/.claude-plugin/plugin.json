@@ -1,6 +1,6 @@
 {
   "name": "task-progress",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "작업 체크리스트 진행률(파란 동그라미, 퍼센트·막대·도넛), 메인 모델과 서브에이전트의 모델·추론 수준을 오른쪽 Pane에 보여 준다 (/progress)",
   "types": "./types/index.d.ts",
   "author": {

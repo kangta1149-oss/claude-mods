@@ -1,18 +1,25 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRun, ModelUse, ProgressStyle, TaskItem, TaskStatus } from '../types'
+import type { AgentRun, ModelUse, ProgressStyle, RequestItem, TaskItem, TaskStatus } from '../types'
 import {
   BLUE,
   STYLES,
+  activityOf,
   agentGroups,
+  boardOf,
   donutSvg,
+  durationLabel,
   isStyle,
   modelLabel,
+  nextBatch,
+  nowLine,
   progressMarkdown,
+  requestMark,
+  requestRow,
   ringRows,
-  summarize,
   taskMark,
+  titleOf,
 } from './view'
 
 const PANE = 'task-progress'
@@ -24,11 +31,45 @@ const tasks = atom({ plugin: 'task-progress', key: 'tasks' } as const, [])
 const main = atom({ plugin: 'task-progress', key: 'main' } as const, null)
 const agents = atom({ plugin: 'task-progress', key: 'agents' } as const, [])
 const style = atom({ plugin: 'task-progress', key: 'style' } as const, 'bar')
+const requests = atom({ plugin: 'task-progress', key: 'requests' } as const, [])
+
+const MAX_REQUESTS = 100
+
+/**
+ * Appended to the system prompt: the board follows the task list, so work of
+ * several steps should keep one, across the follow-up messages too.
+ */
+const CHECKLIST_GUIDE = [
+  'The user watches this session on a progress board built from your task list (TaskCreate/TaskUpdate, or TodoWrite).',
+  'For any request that takes more than one step (several tool calls, files or stages), create the task list before starting,',
+  'mark an item in_progress when you start it and completed as soon as it is done, and keep using the same list across the',
+  "user's follow-up messages, adding items for new work. A request answered in a single step needs no task list.",
+].join(' ')
 
 const isStatus = (value: unknown): value is TaskStatus =>
   value === 'pending' || value === 'in_progress' || value === 'completed'
 
 const effortOf = (effort: string | number | undefined) => (effort === undefined ? undefined : String(effort))
+
+function clockNow() {
+  try {
+    return new Date().toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false })
+  } catch {
+    return new Date().toISOString().slice(11, 16)
+  }
+}
+
+/**
+ * A listed checklist taken whole: known tasks keep their batch, and the ones
+ * this module had not seen (a resume, a reload) join one batch together, since
+ * a listing says nothing of when each was made.
+ */
+function withBatches(listed: readonly { id: string; subject: string; status: TaskStatus }[], known: readonly TaskItem[]) {
+  const kept = known.filter(one => listed.some(task => task.id === one.id))
+  const fresh = nextBatch(kept)
+
+  return listed.map(task => ({ ...task, batch: known.find(one => one.id === task.id)?.batch ?? fresh }))
+}
 
 // Set from the plugin's options each time the module loads.
 let fileMode: 'auto' | 'always' | 'off' = 'auto'
@@ -51,6 +92,7 @@ async function mirror($: EngineInterface) {
     tasks: await read($, tasks),
     main: await read($, main),
     agents: await read($, agents),
+    requests: await read($, requests),
     style: await read($, style),
     updatedAt,
   })
@@ -79,7 +121,7 @@ async function resync($: EngineInterface) {
     const ran = await $.tool.call({ tool: 'TaskList' })
     if (ran.deny === undefined && !ran.isError) {
       const listed = ran.result.tasks.map(task => ({ id: task.id, subject: task.subject, status: task.status }))
-      await update($, tasks, () => listed)
+      await update($, tasks, known => withBatches(listed, known))
     }
   } catch {
     // No task tools in this session: the list stays as the watched calls left it.
@@ -135,7 +177,11 @@ export const register: Register = (on, options) => {
         subject: ran.result.task.subject || e.subject,
         status: 'pending',
       }
-      await setTasks($, list => [...list.filter(task => task.id !== created.id), created])
+      await setTasks($, list => {
+        const others = list.filter(task => task.id !== created.id)
+
+        return [...others, { ...created, batch: nextBatch(others) }]
+      })
     }
 
     return ran
@@ -147,7 +193,14 @@ export const register: Register = (on, options) => {
       await setTasks($, list => {
         if (e.status === 'deleted') return list.filter(task => task.id !== e.taskId)
         if (!list.some(task => task.id === e.taskId)) {
-          return [...list, { id: e.taskId, subject: e.subject ?? `#${e.taskId}`, status: isStatus(e.status) ? e.status : 'pending' }]
+          const added: TaskItem = {
+            id: e.taskId,
+            subject: e.subject ?? `#${e.taskId}`,
+            status: isStatus(e.status) ? e.status : 'pending',
+            batch: nextBatch(list),
+          }
+
+          return [...list, added]
         }
 
         return list.map(task =>
@@ -166,7 +219,7 @@ export const register: Register = (on, options) => {
     const ran = await next(e)
     if (ran.deny === undefined && !ran.isError) {
       const listed = ran.result.tasks.map(task => ({ id: task.id, subject: task.subject, status: task.status }))
-      await setTasks($, () => listed)
+      await setTasks($, known => withBatches(listed, known))
     }
 
     return ran
@@ -180,12 +233,60 @@ export const register: Register = (on, options) => {
         id: `todo-${index + 1}`,
         subject: todo.status === 'in_progress' ? todo.activeForm || todo.content : todo.content,
         status: todo.status,
+        batch: 1,
       }))
       await setTasks($, () => listed)
     }
 
     return ran
   }).catch(($, e, next) => next(e))
+
+  // Every tool call of the main loop is a step of the request it serves, and
+  // says what that request is doing now.
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId === undefined && (await read($, requests)).some(request => request.status === 'running')) {
+      const activity = activityOf(String(e.tool))
+      await update($, requests, list => {
+        const at = list.map(request => request.status).lastIndexOf('running')
+
+        return list.map((request, index) => (index === at ? { ...request, steps: request.steps + 1, activity } : request))
+      })
+      await mirror($)
+    }
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // A message the person sent opens a request; a turn with no text (a
+  // continuation) goes on with the latest one.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      const title = titleOf(e.text)
+      if (title !== '') {
+        const opened: RequestItem = { id: e.turnId, title, status: 'running', startedAt: clockNow(), steps: 0 }
+        await update($, requests, list => [...list, opened].slice(-MAX_REQUESTS))
+      } else {
+        const resumed: RequestItem = { id: e.turnId, title: '이어서 진행', status: 'running', startedAt: clockNow(), steps: 0 }
+        await update($, requests, list =>
+          list.length === 0
+            ? [resumed]
+            : list.map((request, index): RequestItem =>
+                index === list.length - 1 ? { ...request, status: 'running', took: undefined } : request,
+              ),
+        )
+      }
+      await mirror($)
+    }
+
+    return next(e)
+  })
+
+  // The board follows the task list: ask for one on work of several steps.
+  on('prompt.compose', async ($, e, next) => {
+    const composed = await next(e)
+
+    return { sections: [...composed.sections, { id: 'task-progress', text: CHECKLIST_GUIDE, scope: 'session' }] }
+  })
 
   // A subagent joins the board once the engine has started it and named its model.
   on('agent.spawn', async ($, e, next) => {
@@ -231,7 +332,17 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const ended = await next(e)
     const id = e.agentId
-    if (id !== undefined && (await read($, agents)).some(one => one.id === id)) {
+    if (id === undefined) {
+      const status = e.reason === 'answer' ? 'done' : 'stopped'
+      const took = durationLabel(e.durationMs)
+      await update($, requests, list => {
+        const byTurn = list.findIndex(request => request.id === e.turnId && request.status === 'running')
+        const at = byTurn >= 0 ? byTurn : list.map(request => request.status).lastIndexOf('running')
+
+        return list.map((request, index) => (index === at ? { ...request, status, took, activity: undefined } : request))
+      })
+      await mirror($)
+    } else if ((await read($, agents)).some(one => one.id === id)) {
       const status = e.reason === 'answer' ? 'done' : 'failed'
       await update($, agents, all => all.map(one => (one.id === id ? { ...one, status } : one)))
       await mirror($)
@@ -242,13 +353,13 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const list = await read($, tasks)
     const chosen = await read($, style)
     const mainUse = await read($, main)
     const runs = await read($, agents)
-    const { done, total, left, percent, label } = summarize(list)
+    const board = boardOf(await read($, tasks), await read($, requests))
+    const { percent } = board
     const width = Math.max(10, e.props.bodyColumns)
-    const filled = total === 0 ? 0 : Math.round((done / total) * width)
+    const filled = Math.round((percent / 100) * width)
     const running = runs.filter(one => one.status === 'running').length
 
     let meter
@@ -309,11 +420,14 @@ export const register: Register = (on, options) => {
         <Box key="gap-1" marginTop={1} />
         {meter}
         <Box key="summary">
-          <Text bold>{label}</Text>
+          <Text bold>{board.label}</Text>
         </Box>
         <Box key="left">
-          <Text dimColor>
-            완료 {done}개 · 남은 작업 {left}개
+          <Text dimColor>{board.left}</Text>
+        </Box>
+        <Box key="now" marginTop={1}>
+          <Text color={board.latest?.status === 'running' ? BLUE : undefined} wrap="truncate-end">
+            지금 · {nowLine(board.latest)}
           </Text>
         </Box>
 
@@ -333,15 +447,36 @@ export const register: Register = (on, options) => {
         </Box>
 
         <Box key="tasks" flexDirection="column" marginTop={1}>
-          <Text bold>작업 목록 ({total})</Text>
-          {total === 0 && <Text dimColor>체크리스트 항목이 아직 없습니다.</Text>}
-          {list.map(task => (
+          <Text bold>체크리스트 ({board.current.length})</Text>
+          {board.current.length === 0 && <Text dimColor>체크리스트 항목이 아직 없습니다.</Text>}
+          {board.current.map(task => (
             <Box flexDirection="row">
               <Text color={BLUE} dimColor={task.status === 'pending'}>
                 {taskMark(task.status)}{' '}
               </Text>
               <Text dimColor={task.status === 'completed'} bold={task.status === 'in_progress'} wrap="truncate-end">
                 {task.subject}
+              </Text>
+            </Box>
+          ))}
+          {board.earlier.tasks > 0 && (
+            <Text dimColor>
+              앞서 끝낸 체크리스트 {board.earlier.batches}개 · 항목 {board.earlier.tasks}개
+            </Text>
+          )}
+        </Box>
+
+        <Box key="requests" flexDirection="column" marginTop={1}>
+          <Text bold>요청 기록 ({board.recent.length + board.olderRequests})</Text>
+          {board.recent.length === 0 && <Text dimColor>아직 보낸 요청이 없습니다.</Text>}
+          {board.olderRequests > 0 && <Text dimColor>이전 요청 {board.olderRequests}개는 접어 둠</Text>}
+          {board.recent.map(request => (
+            <Box flexDirection="row">
+              <Text color={BLUE} dimColor={request.status === 'stopped'}>
+                {requestMark(request.status)}{' '}
+              </Text>
+              <Text dimColor={request.status !== 'running'} bold={request.status === 'running'} wrap="truncate-end">
+                {requestRow(request)}
               </Text>
             </Box>
           ))}
