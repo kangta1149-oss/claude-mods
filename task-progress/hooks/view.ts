@@ -101,8 +101,10 @@ export function donutSvg(percent: number, size = 120) {
   ].join('')
 }
 
-const escape = (text: string) =>
-  text.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
+/** Text that renders as itself in Markdown: its marks escaped, kept to one line. */
+const plain = (text: string) => text.replace(/\s+/g, ' ').replace(/([\\`*_~[\]<>#|])/g, '\\$1')
+
+const BAR_CELLS = 20
 
 export type Snapshot = {
   tasks: readonly TaskItem[]
@@ -112,69 +114,52 @@ export type Snapshot = {
   updatedAt: string
 }
 
-/** The progress board as a page of its own, for a session no surface draws a pane in. */
-export function progressHtml({ tasks, main, agents, style, updatedAt }: Snapshot) {
+/**
+ * The progress board as a Markdown page, for a session no surface draws a pane
+ * in: the Claude app shows a .md file rendered at once, where an .html file
+ * opens as source until its preview is turned on.
+ */
+export function progressMarkdown({ tasks, main, agents, style, updatedAt }: Snapshot) {
   const { done, total, left, percent, label } = summarize(tasks)
   const running = agents.filter(agent => agent.status === 'running').length
+  const filled = total === 0 ? 0 : Math.round((done / total) * BAR_CELLS)
   const meter =
     style === 'donut'
-      ? `<div class="donut">${donutSvg(percent, 140)}</div>`
+      ? ['```', ...ringRows(percent).map(row => row.map(run => run.text).join('').trimEnd()), '```']
       : style === 'bar'
-        ? `<div class="bar"><div style="width:${percent}%"></div></div>`
-        : `<div class="big">${percent}%</div>`
-  const items = tasks
-    .map(
-      task =>
-        `<li class="${task.status}"><span class="dot"></span><span>${escape(task.subject)}</span>${
-          task.status === 'in_progress' ? '<em>진행 중</em>' : ''
-        }</li>`,
-    )
-    .join('')
-  const groups = agentGroups(agents)
-    .map(group => `<li>${escape(group.label)} ×${group.count}${group.running ? ` <em>실행 중 ${group.running}</em>` : ''}</li>`)
-    .join('')
+        ? [`\`${'█'.repeat(filled)}${'░'.repeat(BAR_CELLS - filled)}\` ${percent}%`]
+        : [`## ${percent}%`]
+  const groups = agentGroups(agents).map(
+    group => `  - ${plain(group.label)} ×${group.count}${group.running ? ` · 실행 중 ${group.running}` : ''}`,
+  )
+  const rows = tasks.map(task =>
+    task.status === 'completed'
+      ? `- 🔵 ~~${plain(task.subject)}~~`
+      : task.status === 'in_progress'
+        ? `- ◐ **${plain(task.subject)}** _(진행 중)_`
+        : `- ⚪ ${plain(task.subject)}`,
+  )
 
-  return `<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="5">
-<title>작업 진행률</title>
-<style>
-:root { --bg:#ffffff; --fg:#1f2933; --dim:#7b8794; --line:#e4e7eb; --blue:${BLUE}; --track:${TRACK}; }
-@media (prefers-color-scheme: dark) { :root { --bg:#16181d; --fg:#e4e7eb; --dim:#9aa5b1; --line:#2d323b; --track:#3a404b; } }
-body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:15px/1.5 "Malgun Gothic", system-ui, sans-serif; }
-h1 { font-size:18px; margin:0 0 12px; }
-h2 { font-size:13px; color:var(--dim); margin:20px 0 6px; font-weight:600; }
-.summary { font-size:17px; font-weight:700; margin:8px 0; }
-.left { color:var(--dim); }
-.big { font-size:44px; font-weight:800; color:var(--blue); line-height:1.1; }
-.bar { height:14px; background:var(--track); border-radius:7px; overflow:hidden; }
-.bar div { height:100%; background:var(--blue); }
-ul { list-style:none; margin:0; padding:0; }
-li { display:flex; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid var(--line); }
-.dot { flex:none; width:14px; height:14px; border-radius:50%; border:2px solid var(--blue); box-sizing:border-box; }
-.completed .dot { background:var(--blue); }
-.completed span:last-child { color:var(--dim); }
-.in_progress .dot { background:linear-gradient(90deg, var(--blue) 50%, transparent 50%); }
-em { font-style:normal; font-size:12px; color:var(--blue); margin-left:auto; }
-.stamp { margin-top:20px; font-size:12px; color:var(--dim); }
-</style>
-</head>
-<body>
-<h1>작업 진행률</h1>
-${meter}
-<div class="summary">${label}</div>
-<div class="left">완료 ${done}개 · 남은 작업 ${left}개</div>
-<h2>모델</h2>
-<ul><li>메인 · ${main ? escape(modelLabel(main)) : '아직 기록 없음'}</li></ul>
-<h2>서브에이전트 ${agents.length}개${running ? ` (실행 중 ${running})` : ''}</h2>
-<ul>${groups || '<li class="left">없음</li>'}</ul>
-<h2>작업 목록 (${total})</h2>
-<ul>${items || '<li class="left">체크리스트 항목이 아직 없습니다.</li>'}</ul>
-<div class="stamp">갱신 ${escape(updatedAt)} · 5초마다 다시 읽음</div>
-</body>
-</html>
-`
+  return [
+    '# 작업 진행률',
+    '',
+    `**${label}**`,
+    '',
+    ...meter,
+    '',
+    `완료 ${done}개 · 남은 작업 ${left}개`,
+    '',
+    '## 모델',
+    '',
+    `- 메인 · ${main ? plain(modelLabel(main)) : '아직 기록 없음'}`,
+    `- 서브에이전트 ${agents.length}개${running ? ` (실행 중 ${running})` : ''}`,
+    ...groups,
+    '',
+    `## 작업 목록 (${total})`,
+    '',
+    ...(rows.length > 0 ? rows : ['체크리스트 항목이 아직 없습니다.']),
+    '',
+    `_갱신 ${plain(updatedAt)} · 파일을 다시 열면 최신 내용이 보인다_`,
+    '',
+  ].join('\n')
 }

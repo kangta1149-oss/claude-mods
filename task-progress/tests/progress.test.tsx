@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
+import { progressMarkdown } from '../hooks/view'
 
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -20,7 +21,7 @@ const PANE = {
 const mountPane = <S extends (typeof SURFACES)[number]>($: Engine, surface: S) =>
   $.ui.mount({ plugin: 'task-progress', surface, ...PANE })
 
-/** The world beneath the plugin: no cloud session (so no progress.html), a store in memory. */
+/** The world beneath the plugin: no cloud session (so no progress.md), a store in memory. */
 function world(on: On) {
   mock.env(on, {})
   const saved: Record<string, unknown> = {}
@@ -236,7 +237,7 @@ test('/progress는 Pane을 둘 곳이 없으면 그 이유를 말한다', async 
     origin: { kind: 'composer' },
     presentation: { isFullscreen: true, columns: 160 },
   })
-  expect(ran.text).toBe('이 화면에는 Pane이 표시되지 않습니다(no-surface). 진행판 파일 progress.html에서 볼 수 있습니다.')
+  expect(ran.text).toBe('이 화면에는 Pane이 표시되지 않습니다(no-surface). 진행판 파일 progress.md에서 볼 수 있습니다.')
 })
 
 test('메인 모델과 서브에이전트의 모델·추론 수준을 묶어 센다', async ($, on) => {
@@ -372,4 +373,34 @@ test('세션 시작 때 저장된 표시 방식을 되살리고 TaskList로 목�
     expect((await ui.find({ key: 'summary' }))?.text).toBe('완료 1/1 · 100%')
     await ui.unmount()
   }
+})
+
+test('progress.md는 표시 방식별 진행률, 모델, 동그라미 목록을 Markdown으로 쓴다', async () => {
+  const tasks = [
+    { id: '1', subject: '지문 분석', status: 'completed' },
+    { id: '2', subject: '단어 *추출*', status: 'in_progress' },
+    { id: '3', subject: '해설 작성', status: 'pending' },
+  ] as const
+  const agents = [
+    { id: 'a', description: '', type: 'general', model: 'claude-haiku-4-5', effort: 'low', status: 'running' },
+  ] as const
+  const page = (style: 'percent' | 'bar' | 'donut') =>
+    progressMarkdown({ tasks, agents, main: { model: 'claude-opus-5-5', effort: 'high' }, style, updatedAt: 't' })
+
+  const bar = page('bar')
+  expect(bar).toContain('**완료 1/3 · 33%**')
+  expect(bar).toContain('`███████░░░░░░░░░░░░░` 33%')
+  expect(bar).toContain('완료 1개 · 남은 작업 2개')
+  expect(bar).toContain('- 메인 · Opus 5.5 · high')
+  expect(bar).toContain('- 서브에이전트 1개 (실행 중 1)')
+  expect(bar).toContain('  - Haiku 4.5 · low ×1 · 실행 중 1')
+  expect(bar).toContain('- 🔵 ~~지문 분석~~\n- ◐ **단어 \\*추출\\*** _(진행 중)_\n- ⚪ 해설 작성')
+  expect(page('percent')).toContain('## 33%')
+  const donut = page('donut')
+  expect(donut).toContain('33%')
+  expect(donut.split('●').length - 1).toBe(4)
+  expect(donut.split('○').length - 1).toBe(8)
+  expect(progressMarkdown({ tasks: [], agents: [], main: null, style: 'bar', updatedAt: 't' })).toContain(
+    '체크리스트 항목이 아직 없습니다.',
+  )
 })

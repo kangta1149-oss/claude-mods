@@ -21,9 +21,9 @@ Claude Code mod 모음. 저장소 루트가 설치 목록(marketplace) `claude-m
 | 쓰는 곳 | 보이는 방식 |
 | --- | --- |
 | 내 컴퓨터의 Claude Code (터미널, 데스크톱 앱 Code 탭의 로컬 세션, VS Code) | 오른쪽 Pane, 실시간 |
-| 클라우드 세션 (Claude 앱·claude.ai에서 연 세션) | Pane은 그려지지 않는다. 같은 내용이 작업 폴더의 `progress.html`에 갱신되고, 페이지는 5초마다 다시 읽는다 |
+| 클라우드 세션 (Claude 앱·claude.ai에서 연 세션) | Pane은 그려지지 않는다. 같은 내용이 작업 폴더의 `progress.md`에 갱신된다. Claude 앱은 .md 파일을 열자마자 정리된 화면으로 보여 준다. 도넛은 글자 고리, 막대는 글자 막대, 완료는 🔵, 진행 중은 ◐, 대기는 ⚪ |
 
-`progress.html`을 쓰는 조건은 플러그인 설정 `progressFile`로 바꾼다: `auto`(기본, 클라우드에서만) / `always` / `off`.
+`progress.md`를 쓰는 조건은 플러그인 설정 `progressFile`로 바꾼다: `auto`(기본, 클라우드에서만) / `always` / `off`.
 
 ### 설치
 
@@ -58,7 +58,12 @@ claude plugin marketplace add kangta1149-oss/claude-mods || true
 claude plugin install task-progress@claude-mods --scope user --config progressFile=auto || true
 ```
 
-클라우드에서는 Pane이 그려지지 않으므로 작업 폴더의 `progress.html`로 본다.
+클라우드에서는 Pane이 그려지지 않으므로 작업 폴더의 `progress.md`로 본다. 세션에서 "progress.md 열어 줘"라고 하면 된다.
+
+### 새 버전 받기
+
+- 내 컴퓨터: `claude plugin marketplace update claude-mods` 후 `claude plugin update task-progress@claude-mods`, 그리고 Claude Code를 다시 시작하거나 `/reload-plugins`
+- 클라우드: 설정 스크립트 결과가 캐시되므로, 스크립트를 한 글자라도 바꿔 저장해야 다음 새 세션에서 새 버전을 받는다 (예: 2번째 줄 버전 표시 수정)
 
 ### 설치 확인
 

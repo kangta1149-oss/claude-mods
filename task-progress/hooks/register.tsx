@@ -9,7 +9,7 @@ import {
   donutSvg,
   isStyle,
   modelLabel,
-  progressHtml,
+  progressMarkdown,
   ringRows,
   summarize,
   taskMark,
@@ -17,7 +17,7 @@ import {
 
 const PANE = 'task-progress'
 const TITLE = '작업 진행률'
-const FILE = 'progress.html'
+const FILE = 'progress.md'
 const STYLE_KEY = 'style'
 
 const tasks = atom({ plugin: 'task-progress', key: 'tasks' } as const, [])
@@ -47,7 +47,7 @@ async function mirror($: EngineInterface) {
   } catch {
     updatedAt = new Date().toISOString()
   }
-  const html = progressHtml({
+  const page = progressMarkdown({
     tasks: await read($, tasks),
     main: await read($, main),
     agents: await read($, agents),
@@ -55,7 +55,7 @@ async function mirror($: EngineInterface) {
     updatedAt,
   })
   try {
-    await $.fs.write(FILE, html)
+    await $.fs.write(FILE, page)
   } catch {
     // A read-only folder: the pane is all there is.
   }
