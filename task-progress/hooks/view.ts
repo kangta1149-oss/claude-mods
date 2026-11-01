@@ -104,7 +104,48 @@ export function donutSvg(percent: number, size = 120) {
 /** Text that renders as itself in Markdown: its marks escaped, kept to one line. */
 const plain = (text: string) => text.replace(/\s+/g, ' ').replace(/([\\`*_~[\]<>#|])/g, '\\$1')
 
-const BAR_CELLS = 20
+/**
+ * An SVG as an image Markdown can carry inside the file: the Claude app draws a
+ * data: image, and draws neither HTML nor an image read from a file beside it.
+ * The SVGs here are ASCII, so `btoa` takes them as they are.
+ */
+export const svgImage = (alt: string, svg: string) => `![${alt}](data:image/svg+xml;base64,${btoa(svg)})`
+
+export const BAR_WIDTH = 320
+
+export function barSvg(percent: number, width = BAR_WIDTH) {
+  const filled = Math.round((percent / 100) * width)
+
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="14" viewBox="0 0 ${width} 14">`,
+    `<rect width="${width}" height="14" rx="7" fill="${TRACK}"/>`,
+    filled > 0 ? `<rect width="${Math.max(filled, 14)}" height="14" rx="7" fill="${BLUE}"/>` : '',
+    '</svg>',
+  ].join('')
+}
+
+export function percentSvg(percent: number) {
+  return [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="140" height="56" viewBox="0 0 140 56">',
+    `<text x="0" y="46" font-family="sans-serif" font-size="48" font-weight="800" fill="${BLUE}">${percent}%</text>`,
+    '</svg>',
+  ].join('')
+}
+
+/** A row's circle: filled when done, half when under way, a ring while waiting. */
+export function dotSvg(status: TaskItem['status']) {
+  const ring = `<circle cx="7" cy="7" r="5.5" fill="none" stroke="${BLUE}" stroke-width="2"/>`
+  const body =
+    status === 'completed'
+      ? `<circle cx="7" cy="7" r="6.5" fill="${BLUE}"/>`
+      : status === 'in_progress'
+        ? `${ring}<path d="M7 1.5 A5.5 5.5 0 0 0 7 12.5 Z" fill="${BLUE}"/>`
+        : ring
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14">${body}</svg>`
+}
+
+const DOT_ALT = { completed: '완료', in_progress: '진행 중', pending: '대기' } as const
 
 export type Snapshot = {
   tasks: readonly TaskItem[]
@@ -117,35 +158,37 @@ export type Snapshot = {
 /**
  * The progress board as a Markdown page, for a session no surface draws a pane
  * in: the Claude app shows a .md file rendered at once, where an .html file
- * opens as source until its preview is turned on.
+ * opens as source until its preview is turned on. The meter and the circles
+ * are blue SVG images carried in the file.
  */
 export function progressMarkdown({ tasks, main, agents, style, updatedAt }: Snapshot) {
   const { done, total, left, percent, label } = summarize(tasks)
   const running = agents.filter(agent => agent.status === 'running').length
-  const filled = total === 0 ? 0 : Math.round((done / total) * BAR_CELLS)
   const meter =
     style === 'donut'
-      ? ['```', ...ringRows(percent).map(row => row.map(run => run.text).join('').trimEnd()), '```']
+      ? svgImage(`진행률 ${percent}%`, donutSvg(percent, 140))
       : style === 'bar'
-        ? [`\`${'█'.repeat(filled)}${'░'.repeat(BAR_CELLS - filled)}\` ${percent}%`]
-        : [`## ${percent}%`]
+        ? svgImage(`진행률 ${percent}%`, barSvg(percent))
+        : svgImage(`진행률 ${percent}%`, percentSvg(percent))
   const groups = agentGroups(agents).map(
     group => `  - ${plain(group.label)} ×${group.count}${group.running ? ` · 실행 중 ${group.running}` : ''}`,
   )
-  const rows = tasks.map(task =>
-    task.status === 'completed'
-      ? `- 🔵 ~~${plain(task.subject)}~~`
-      : task.status === 'in_progress'
-        ? `- ◐ **${plain(task.subject)}** _(진행 중)_`
-        : `- ⚪ ${plain(task.subject)}`,
-  )
+  // One row per line (a hard break, two spaces), no list bullet beside the circle.
+  const rows = tasks.map(task => {
+    const dot = svgImage(DOT_ALT[task.status], dotSvg(task.status))
+    const subject = plain(task.subject)
+    const text =
+      task.status === 'completed' ? `~~${subject}~~` : task.status === 'in_progress' ? `**${subject}** _(진행 중)_` : subject
+
+    return `${dot} ${text}`
+  })
 
   return [
     '# 작업 진행률',
     '',
-    `**${label}**`,
+    meter,
     '',
-    ...meter,
+    `**${label}**`,
     '',
     `완료 ${done}개 · 남은 작업 ${left}개`,
     '',
@@ -157,7 +200,7 @@ export function progressMarkdown({ tasks, main, agents, style, updatedAt }: Snap
     '',
     `## 작업 목록 (${total})`,
     '',
-    ...(rows.length > 0 ? rows : ['체크리스트 항목이 아직 없습니다.']),
+    rows.length > 0 ? rows.join('  \n') : '체크리스트 항목이 아직 없습니다.',
     '',
     `_갱신 ${plain(updatedAt)} · 파일을 다시 열면 최신 내용이 보인다_`,
     '',

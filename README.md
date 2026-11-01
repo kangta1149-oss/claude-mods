@@ -21,7 +21,7 @@ Claude Code mod 모음. 저장소 루트가 설치 목록(marketplace) `claude-m
 | 쓰는 곳 | 보이는 방식 |
 | --- | --- |
 | 내 컴퓨터의 Claude Code (터미널, 데스크톱 앱 Code 탭의 로컬 세션, VS Code) | 오른쪽 Pane, 실시간 |
-| 클라우드 세션 (Claude 앱·claude.ai에서 연 세션) | Pane은 그려지지 않는다. 같은 내용이 작업 폴더의 `progress.md`에 갱신된다. Claude 앱은 .md 파일을 열자마자 정리된 화면으로 보여 준다. 도넛은 글자 고리, 막대는 글자 막대, 완료는 🔵, 진행 중은 ◐, 대기는 ⚪ |
+| 클라우드 세션 (Claude 앱·claude.ai에서 연 세션) | Pane은 그려지지 않는다. 같은 내용이 작업 폴더의 `progress.md`에 갱신된다. Claude 앱은 .md 파일을 열자마자 정리된 화면으로 보여 준다. 막대·도넛·퍼센트와 작업 동그라미는 파일 안에 넣은 파란 그림(SVG)이다 |
 
 `progress.md`를 쓰는 조건은 플러그인 설정 `progressFile`로 바꾼다: `auto`(기본, 클라우드에서만) / `always` / `off`.
 

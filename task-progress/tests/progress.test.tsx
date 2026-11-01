@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { progressMarkdown } from '../hooks/view'
+import { BAR_WIDTH, barSvg, donutSvg, dotSvg, percentSvg, progressMarkdown, svgImage } from '../hooks/view'
 
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -375,7 +375,7 @@ test('세션 시작 때 저장된 표시 방식을 되살리고 TaskList로 목�
   }
 })
 
-test('progress.md는 표시 방식별 진행률, 모델, 동그라미 목록을 Markdown으로 쓴다', async () => {
+test('progress.md는 표시 방식별 파란 그림, 모델, 동그라미 목록을 Markdown으로 쓴다', async () => {
   const tasks = [
     { id: '1', subject: '지문 분석', status: 'completed' },
     { id: '2', subject: '단어 *추출*', status: 'in_progress' },
@@ -388,18 +388,23 @@ test('progress.md는 표시 방식별 진행률, 모델, 동그라미 목록을 
     progressMarkdown({ tasks, agents, main: { model: 'claude-opus-5-5', effort: 'high' }, style, updatedAt: 't' })
 
   const bar = page('bar')
+  expect(bar).toContain(svgImage('진행률 33%', barSvg(33)))
+  expect(barSvg(33)).toContain(`width="${Math.round(0.33 * BAR_WIDTH)}"`)
   expect(bar).toContain('**완료 1/3 · 33%**')
-  expect(bar).toContain('`███████░░░░░░░░░░░░░` 33%')
   expect(bar).toContain('완료 1개 · 남은 작업 2개')
   expect(bar).toContain('- 메인 · Opus 5.5 · high')
   expect(bar).toContain('- 서브에이전트 1개 (실행 중 1)')
   expect(bar).toContain('  - Haiku 4.5 · low ×1 · 실행 중 1')
-  expect(bar).toContain('- 🔵 ~~지문 분석~~\n- ◐ **단어 \\*추출\\*** _(진행 중)_\n- ⚪ 해설 작성')
-  expect(page('percent')).toContain('## 33%')
-  const donut = page('donut')
-  expect(donut).toContain('33%')
-  expect(donut.split('●').length - 1).toBe(4)
-  expect(donut.split('○').length - 1).toBe(8)
+  expect(bar).toContain(
+    [
+      `${svgImage('완료', dotSvg('completed'))} ~~지문 분석~~`,
+      `${svgImage('진행 중', dotSvg('in_progress'))} **단어 \\*추출\\*** _(진행 중)_`,
+      `${svgImage('대기', dotSvg('pending'))} 해설 작성`,
+    ].join('  \n'),
+  )
+  expect(page('donut')).toContain(svgImage('진행률 33%', donutSvg(33, 140)))
+  expect(page('percent')).toContain(svgImage('진행률 33%', percentSvg(33)))
+  expect(bar).toMatch(/^!\[진행률 33%\]\(data:image\/svg\+xml;base64,[A-Za-z0-9+/=]+\)$/m)
   expect(progressMarkdown({ tasks: [], agents: [], main: null, style: 'bar', updatedAt: 't' })).toContain(
     '체크리스트 항목이 아직 없습니다.',
   )
